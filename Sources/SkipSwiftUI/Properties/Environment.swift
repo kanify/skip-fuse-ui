@@ -58,6 +58,7 @@ public func EnvironmentSupport_Swift_release(_ Java_env: JNIEnvPointer, _ Java_t
     return SwiftObjectNil
 }
 
+#if os(Android) || ROBOLECTRIC
 /// Compare the values held by two `EnvironmentSupport` value holders.
 ///
 /// The Compose side calls this from `EnvironmentSupport.equals` to decide whether a bridged
@@ -151,4 +152,4 @@ extension Equatable {
         return self == other
     }
 }
-
+#endif
