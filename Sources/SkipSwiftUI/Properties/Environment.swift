@@ -57,3 +57,98 @@ public func EnvironmentSupport_Swift_release(_ Java_env: JNIEnvPointer, _ Java_t
     Swift_valueHolder.release(as: Box<Any>.self)
     return SwiftObjectNil
 }
+
+/// Compare the values held by two `EnvironmentSupport` value holders.
+///
+/// The Compose side calls this from `EnvironmentSupport.equals` to decide whether a bridged
+/// environment value that was provided again is actually a different value. Without it every
+/// evaluation of `.environment(_:_:)` or `.environment(_:)` looks like a change, because each
+/// evaluation boxes the value anew, and every reader of the key is invalidated.
+///
+/// Two holders match when their values are `Equatable` and equal, or are the same class
+/// instance, or are both `nil`. Anything else (closures, non-`Equatable` structs) does not
+/// match, which is the behavior before this function existed.
+@_cdecl("Java_skip_ui_EnvironmentSupport_Swift_1isSameValue")
+public func EnvironmentSupport_Swift_isSameValue(_ Java_env: JNIEnvPointer, _ Java_target: JavaObjectPointer, _ Swift_valueHolder: SwiftObjectPointer, _ Swift_other: SwiftObjectPointer) -> Int64 {
+    guard Swift_valueHolder != SwiftObjectNil, Swift_other != SwiftObjectNil else {
+        return Swift_valueHolder == Swift_other ? 1 : 0
+    }
+    if Swift_valueHolder == Swift_other {
+        return 1
+    }
+    let lhs: AnyObject? = Swift_valueHolder.pointee()
+    let rhs: AnyObject? = Swift_other.pointee()
+    guard let lhsBox = lhs as? any EnvironmentValueBox, let rhs else {
+        return 0
+    }
+    return lhsBox.holdsSameEnvironmentValue(as: rhs) ? 1 : 0
+}
+
+/// Type-erased access to a boxed environment value for comparison.
+protocol EnvironmentValueBox: AnyObject {
+    func holdsSameEnvironmentValue(as other: AnyObject) -> Bool
+}
+
+extension Box: EnvironmentValueBox {
+    func holdsSameEnvironmentValue(as other: AnyObject) -> Bool {
+        guard let other = other as? Box<Value> else {
+            return false
+        }
+        return environmentValuesMatch(value, other.value)
+    }
+}
+
+private func environmentValuesMatch(_ lhs: Any, _ rhs: Any) -> Bool {
+    if let lhs = lhs as? any Equatable {
+        return lhs.isEqualEnvironmentValue(rhs)
+    }
+    // Not `Equatable`: look through optionals, then compare class instances by identity.
+    let lhsUnwrapped = unwrapEnvironmentOptional(lhs)
+    let rhsUnwrapped = unwrapEnvironmentOptional(rhs)
+    switch (lhsUnwrapped, rhsUnwrapped) {
+    case (nil, nil):
+        return true
+    case (let lhsValue?, let rhsValue?):
+        guard type(of: lhsValue) is AnyClass, type(of: rhsValue) is AnyClass else {
+            return false
+        }
+        return (lhsValue as AnyObject) === (rhsValue as AnyObject)
+    default:
+        return false
+    }
+}
+
+private func unwrapEnvironmentOptional(_ value: Any) -> Any? {
+    guard let optional = value as? any EnvironmentOptional else {
+        return value
+    }
+    guard let wrapped = optional.environmentWrapped else {
+        return nil
+    }
+    return unwrapEnvironmentOptional(wrapped)
+}
+
+private protocol EnvironmentOptional {
+    var environmentWrapped: Any? { get }
+}
+
+extension Optional: EnvironmentOptional {
+    fileprivate var environmentWrapped: Any? {
+        switch self {
+        case .none:
+            return nil
+        case .some(let wrapped):
+            return wrapped
+        }
+    }
+}
+
+extension Equatable {
+    fileprivate func isEqualEnvironmentValue(_ other: Any) -> Bool {
+        guard let other = other as? Self else {
+            return false
+        }
+        return self == other
+    }
+}
+
